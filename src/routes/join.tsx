@@ -1,5 +1,5 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { z } from "zod";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,6 +11,9 @@ import { saveRoom } from "@/lib/tactrack/db";
 
 const search = z.object({
   code: z.string().optional(),
+  c: z.string().optional(),
+  key: z.string().optional(),
+  k: z.string().optional(),
 });
 
 export const Route = createFileRoute("/join")({
@@ -23,30 +26,66 @@ export const Route = createFileRoute("/join")({
 
 // Payload format embedded in QR: tactrack://join?c=ABC123&k=base64key
 function parsePayload(text: string): { code: string; key: string } | null {
+  const raw = text.trim();
+  if (!raw) return null;
+
+  const normalize = (c: string | null, k: string | null) => {
+    const code = (c ?? "").replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+    const key = (k ?? "").trim().replace(/\s+/g, "");
+    if (!code || !key) return null;
+    return { code, key };
+  };
+
+  const fromUrlSearch = (searchText: string) => {
+    const sp = new URLSearchParams(searchText);
+    return normalize(sp.get("c") ?? sp.get("code"), sp.get("k") ?? sp.get("key"));
+  };
+
   try {
-    const url = new URL(text);
-    const c = url.searchParams.get("c");
-    const k = url.searchParams.get("k");
-    if (c && k) return { code: c.toUpperCase(), key: k };
+    const url = new URL(raw);
+    const parsed = normalize(
+      url.searchParams.get("c") ?? url.searchParams.get("code"),
+      url.searchParams.get("k") ?? url.searchParams.get("key"),
+    );
+    if (parsed) return parsed;
   } catch {
-    // ignore
+    // Continue with non-URL fallbacks.
   }
+
+  const queryIdx = raw.indexOf("?");
+  if (queryIdx >= 0) {
+    const parsed = fromUrlSearch(raw.slice(queryIdx + 1));
+    if (parsed) return parsed;
+  }
+
+  if (raw.includes("=")) {
+    const parsed = fromUrlSearch(raw);
+    if (parsed) return parsed;
+  }
+
   return null;
 }
 
 function JoinPage() {
+  const search = Route.useSearch();
   const navigate = useNavigate();
   const [error, setError] = useState<string | null>(null);
   const [code, setCode] = useState("");
   const [key, setKey] = useState("");
+  const attemptedAutoJoinRef = useRef(false);
 
   async function go(c: string, k: string) {
-    if (c.length < 4 || k.length < 8) {
+    const nextCode = c.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+    const nextKey = k.trim().replace(/\s+/g, "");
+
+    if (nextCode.length < 4 || nextKey.length < 8) {
       setError("Invalid code or key");
       return;
     }
-    await saveRoom({ code: c, keyB64: k, createdAt: Date.now(), lastJoined: Date.now() });
-    navigate({ to: "/room/$code", params: { code: c }, search: { k } });
+
+    setError(null);
+    await saveRoom({ code: nextCode, keyB64: nextKey, createdAt: Date.now(), lastJoined: Date.now() });
+    navigate({ to: "/room/$code", params: { code: nextCode }, search: { k: nextKey } });
   }
 
   function onScan(text: string) {
@@ -57,6 +96,24 @@ function JoinPage() {
     }
     go(p.code, p.key);
   }
+
+  useEffect(() => {
+    const prefCode = (search.c ?? search.code ?? "").trim();
+    const prefKey = (search.k ?? search.key ?? "").trim();
+    if (prefCode) setCode(prefCode.toUpperCase());
+    if (prefKey) setKey(prefKey);
+  }, [search.c, search.code, search.k, search.key]);
+
+  useEffect(() => {
+    if (attemptedAutoJoinRef.current) return;
+    const prefCode = (search.c ?? search.code ?? "").trim();
+    const prefKey = (search.k ?? search.key ?? "").trim();
+    if (!prefCode || !prefKey) return;
+
+    attemptedAutoJoinRef.current = true;
+    go(prefCode, prefKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search.c, search.code, search.k, search.key]);
 
   return (
     <div className="min-h-screen bg-background text-foreground">

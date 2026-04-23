@@ -327,7 +327,10 @@ function RoomPage() {
     return `${window.location.origin}/join?c=${code}&k=${encodeURIComponent(keyB64)}`;
   }, [code, keyB64]);
 
-  const qrPayload = `tactrack://join?c=${code}&k=${keyB64}`;
+  const qrPayload = useMemo(() => {
+    if (inviteUrl) return inviteUrl;
+    return `tactrack://join?c=${code}&k=${encodeURIComponent(keyB64)}`;
+  }, [inviteUrl, code, keyB64]);
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-background text-foreground">

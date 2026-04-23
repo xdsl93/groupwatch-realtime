@@ -18,6 +18,22 @@ type Props = {
 };
 
 const STYLE_URL = "https://tiles.openfreemap.org/styles/dark";
+const FALLBACK_STYLE = {
+  version: 8,
+  sources: {
+    osm: {
+      type: "raster",
+      tiles: [
+        "https://a.tile.openstreetmap.org/{z}/{x}/{y}.png",
+        "https://b.tile.openstreetmap.org/{z}/{x}/{y}.png",
+        "https://c.tile.openstreetmap.org/{z}/{x}/{y}.png",
+      ],
+      tileSize: 256,
+      attribution: "© OpenStreetMap contributors",
+    },
+  },
+  layers: [{ id: "osm", type: "raster", source: "osm" }],
+};
 
 function arrowSvg(color: string, heading: number | null | undefined, isSelf: boolean) {
   const rot = heading ?? 0;
@@ -52,6 +68,29 @@ export function MapView(props: Props) {
     });
     map.addControl(new maplibregl.NavigationControl({ visualizePitch: false }), "top-right");
     mapRef.current = map;
+    let fallbackApplied = false;
+
+    const applyFallbackStyle = () => {
+      if (fallbackApplied || !mapRef.current) return;
+      fallbackApplied = true;
+      mapRef.current.setStyle(FALLBACK_STYLE);
+    };
+
+    map.on("error", (event) => {
+      const message = ((event as { error?: { message?: string } }).error?.message ?? "").toLowerCase();
+      // If style/glyph/sprite/tile fetch fails, switch to a resilient raster fallback.
+      if (
+        message.includes("style") ||
+        message.includes("sprite") ||
+        message.includes("glyph") ||
+        message.includes("source") ||
+        message.includes("tile") ||
+        message.includes("fetch") ||
+        message.includes("network")
+      ) {
+        applyFallbackStyle();
+      }
+    });
 
     // Long-press / right-click to drop marker
     const startLongPress = (lngLat: maplibregl.LngLat) => {
