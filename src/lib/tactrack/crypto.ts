@@ -36,8 +36,25 @@ export async function exportKey(key: CryptoKey): Promise<string> {
   return b64url(raw);
 }
 
+export function normalizeKeyB64(input: string): string {
+  let s = input.trim();
+  try {
+    s = decodeURIComponent(s);
+  } catch {
+    // Already decoded or not URI-encoded.
+  }
+
+  // Some QR/URL parsers may convert "+" into spaces.
+  if (s.includes(" ") && !s.includes("+")) {
+    s = s.replace(/ /g, "+");
+  }
+
+  // Remove line breaks and accidental separators.
+  return s.replace(/\s+/g, "").replace(/[^A-Za-z0-9+/_=-]/g, "");
+}
+
 export async function importKey(b64: string): Promise<CryptoKey> {
-  const raw = b64urlDecode(b64);
+  const raw = b64urlDecode(normalizeKeyB64(b64));
   return crypto.subtle.importKey(
     "raw",
     raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength) as ArrayBuffer,

@@ -8,12 +8,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ArrowLeft, Camera, KeyRound } from "lucide-react";
 import { QrScanner } from "@/components/tactrack/QrScanner";
 import { saveRoom } from "@/lib/tactrack/db";
+import { normalizeKeyB64 } from "@/lib/tactrack/crypto";
 
 const search = z.object({
   code: z.string().optional(),
   c: z.string().optional(),
   key: z.string().optional(),
   k: z.string().optional(),
+  p: z.string().optional(),
 });
 
 export const Route = createFileRoute("/join")({
@@ -24,21 +26,26 @@ export const Route = createFileRoute("/join")({
   component: JoinPage,
 });
 
-// Payload format embedded in QR: tactrack://join?c=ABC123&k=base64key
-function parsePayload(text: string): { code: string; key: string } | null {
+// Payload format embedded in QR: tactrack://join?c=ABC123&k=base64key&p=peer-id
+function parsePayload(text: string): { code: string; key: string; peerId?: string } | null {
   const raw = text.trim();
   if (!raw) return null;
 
-  const normalize = (c: string | null, k: string | null) => {
+  const normalize = (c: string | null, k: string | null, p: string | null) => {
     const code = (c ?? "").replace(/[^A-Za-z0-9]/g, "").toUpperCase();
-    const key = (k ?? "").trim().replace(/\s+/g, "");
+    const key = normalizeKeyB64(k ?? "");
+    const peerId = (p ?? "").trim();
     if (!code || !key) return null;
-    return { code, key };
+    return { code, key, peerId: peerId || undefined };
   };
 
   const fromUrlSearch = (searchText: string) => {
     const sp = new URLSearchParams(searchText);
-    return normalize(sp.get("c") ?? sp.get("code"), sp.get("k") ?? sp.get("key"));
+    return normalize(
+      sp.get("c") ?? sp.get("code"),
+      sp.get("k") ?? sp.get("key"),
+      sp.get("p") ?? sp.get("peer"),
+    );
   };
 
   try {
@@ -46,6 +53,7 @@ function parsePayload(text: string): { code: string; key: string } | null {
     const parsed = normalize(
       url.searchParams.get("c") ?? url.searchParams.get("code"),
       url.searchParams.get("k") ?? url.searchParams.get("key"),
+      url.searchParams.get("p") ?? url.searchParams.get("peer"),
     );
     if (parsed) return parsed;
   } catch {
@@ -74,9 +82,10 @@ function JoinPage() {
   const [key, setKey] = useState("");
   const attemptedAutoJoinRef = useRef(false);
 
-  async function go(c: string, k: string) {
+  async function go(c: string, k: string, peerId?: string) {
     const nextCode = c.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
-    const nextKey = k.trim().replace(/\s+/g, "");
+    const nextKey = normalizeKeyB64(k);
+    const nextPeerId = (peerId ?? "").trim();
 
     if (nextCode.length < 4 || nextKey.length < 8) {
       setError("Invalid code or key");
@@ -85,7 +94,11 @@ function JoinPage() {
 
     setError(null);
     await saveRoom({ code: nextCode, keyB64: nextKey, createdAt: Date.now(), lastJoined: Date.now() });
-    navigate({ to: "/room/$code", params: { code: nextCode }, search: { k: nextKey } });
+    navigate({
+      to: "/room/$code",
+      params: { code: nextCode },
+      search: nextPeerId ? { k: nextKey, p: nextPeerId } : { k: nextKey },
+    });
   }
 
   function onScan(text: string) {
@@ -94,26 +107,27 @@ function JoinPage() {
       setError("Unrecognized QR. Expected a TacTrack invite.");
       return;
     }
-    go(p.code, p.key);
+    go(p.code, p.key, p.peerId);
   }
 
   useEffect(() => {
     const prefCode = (search.c ?? search.code ?? "").trim();
     const prefKey = (search.k ?? search.key ?? "").trim();
     if (prefCode) setCode(prefCode.toUpperCase());
-    if (prefKey) setKey(prefKey);
+    if (prefKey) setKey(normalizeKeyB64(prefKey));
   }, [search.c, search.code, search.k, search.key]);
 
   useEffect(() => {
     if (attemptedAutoJoinRef.current) return;
     const prefCode = (search.c ?? search.code ?? "").trim();
     const prefKey = (search.k ?? search.key ?? "").trim();
+    const prefPeerId = (search.p ?? "").trim();
     if (!prefCode || !prefKey) return;
 
     attemptedAutoJoinRef.current = true;
-    go(prefCode, prefKey);
+    go(prefCode, prefKey, prefPeerId || undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search.c, search.code, search.k, search.key]);
+  }, [search.c, search.code, search.k, search.key, search.p]);
 
   return (
     <div className="min-h-screen bg-background text-foreground">

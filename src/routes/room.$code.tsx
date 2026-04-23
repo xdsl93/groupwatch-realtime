@@ -26,6 +26,7 @@ import { MARKER_ICONS, MarkerIconView } from "@/components/tactrack/MarkerIcon";
 import { QrCode } from "@/components/tactrack/QrCode";
 import { ensureIdentity } from "@/lib/tactrack/identity";
 import { Mesh } from "@/lib/tactrack/mesh";
+import { normalizeKeyB64 } from "@/lib/tactrack/crypto";
 import {
   getRoomMarkers,
   putMarker,
@@ -35,7 +36,7 @@ import {
 import type { Identity, PeerState, Position, SharedMarker, WireMessage } from "@/lib/tactrack/types";
 import { PALETTE, bearingDeg, formatDistance, formatRelative, haversineMeters } from "@/lib/tactrack/geo";
 
-const search = z.object({ k: z.string() });
+const search = z.object({ k: z.string(), p: z.string().optional() });
 
 export const Route = createFileRoute("/room/$code")({
   validateSearch: (s) => search.parse(s),
@@ -47,7 +48,12 @@ export const Route = createFileRoute("/room/$code")({
 
 function RoomPage() {
   const { code } = Route.useParams();
-  const { k: keyB64 } = Route.useSearch();
+  const { k: keyB64Raw, p: bootstrapPeerIdRaw } = Route.useSearch();
+  const keyB64 = useMemo(() => normalizeKeyB64(keyB64Raw), [keyB64Raw]);
+  const bootstrapPeerId = useMemo(() => {
+    const p = (bootstrapPeerIdRaw ?? "").trim();
+    return /^[a-z0-9-]+$/i.test(p) ? p : "";
+  }, [bootstrapPeerIdRaw]);
   const navigate = useNavigate();
 
   const [identity, setIdentity] = useState<Identity | null>(null);
@@ -59,8 +65,12 @@ function RoomPage() {
   const [showQr, setShowQr] = useState(false);
   const [editingMarker, setEditingMarker] = useState<SharedMarker | null>(null);
   const [centerReq, setCenterReq] = useState<{ lat: number; lng: number; ts: number } | null>(null);
+  const [meshSelfId, setMeshSelfId] = useState("");
+  const [meshError, setMeshError] = useState<string | null>(null);
+  const [geoError, setGeoError] = useState<string | null>(null);
 
   const meshRef = useRef<Mesh | null>(null);
+  const identityRef = useRef<Identity | null>(null);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
   const lastBroadcastRef = useRef<{ pos: Position | null; ts: number }>({ pos: null, ts: 0 });
 
@@ -68,23 +78,98 @@ function RoomPage() {
   useEffect(() => {
     let cancelled = false;
     let geoWatchId: number | null = null;
+    let reShare: ReturnType<typeof setInterval> | null = null;
+
+    const startGeolocation = () => {
+      if (!("geolocation" in navigator)) {
+        setGeoError("Geolocation not supported on this device/browser.");
+        return;
+      }
+      if (geoWatchId !== null) return;
+
+      geoWatchId = navigator.geolocation.watchPosition(
+        async (g) => {
+          let battery: number | null = null;
+          type NavWithBattery = Navigator & { getBattery?: () => Promise<{ level: number }> };
+          const nb = navigator as NavWithBattery;
+          if (typeof nb.getBattery === "function") {
+            try {
+              const b = await nb.getBattery();
+              battery = Math.round(b.level * 100);
+            } catch {
+              // ignore
+            }
+          }
+          const pos: Position = {
+            lat: g.coords.latitude,
+            lng: g.coords.longitude,
+            accuracy: g.coords.accuracy,
+            heading: g.coords.heading,
+            speed: g.coords.speed,
+            battery,
+            ts: Date.now(),
+          };
+          setGeoError(null);
+          setSelfPos(pos);
+          // Throttle: every 3s OR if moved >5m
+          const last = lastBroadcastRef.current;
+          const moved = last.pos ? haversineMeters(last.pos, pos) > 5 : true;
+          if (Date.now() - last.ts > 3000 || moved) {
+            lastBroadcastRef.current = { pos, ts: Date.now() };
+            if (identityRef.current) {
+              meshRef.current?.broadcast({ t: "pos", id: identityRef.current.id, pos });
+            }
+          }
+        },
+        (err) => {
+          setGeoError(err.message || "Unable to read GPS position.");
+        },
+        { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 },
+      );
+    };
 
     (async () => {
-      const id = await ensureIdentity();
+      startGeolocation();
+
+      let id: Identity;
+      try {
+        id = await ensureIdentity();
+      } catch {
+        id = {
+          id: crypto.randomUUID(),
+          callsign: `GUEST-${Math.floor(Math.random() * 900 + 100)}`,
+          color: PALETTE[0],
+        };
+      }
       if (cancelled) return;
       setIdentity(id);
-      await saveRoom({ code, keyB64, createdAt: Date.now(), lastJoined: Date.now() });
+      identityRef.current = id;
+      try {
+        await saveRoom({ code, keyB64, createdAt: Date.now(), lastJoined: Date.now() });
+      } catch {
+        // ignore storage errors
+      }
 
       // Load persisted markers
-      const persisted = await getRoomMarkers(code);
       const map = new Map<string, SharedMarker>();
-      for (const m of persisted) map.set(m.id, m);
+      try {
+        const persisted = await getRoomMarkers(code);
+        for (const m of persisted) map.set(m.id, m);
+      } catch {
+        // ignore storage errors
+      }
       if (!cancelled) setMarkers(map);
 
       // Start mesh
-      const mesh = new Mesh(code, keyB64, id, {
-        onSelfId: () => {},
-        onError: (e) => console.warn("mesh error", e),
+      try {
+        const mesh = new Mesh(code, keyB64, id, {
+        onSelfId: (peerId) => {
+          setMeshSelfId(peerId);
+        },
+        onError: (e) => {
+          setMeshError(e.message || "Mesh connection failed.");
+          console.warn("mesh error", e);
+        },
         onPeerConnected: (peerId) => {
           setPeers((prev) => {
             const next = new Map(prev);
@@ -114,62 +199,31 @@ function RoomPage() {
       });
       meshRef.current = mesh;
       await mesh.start();
-
-      // Re-broadcast known markers to incoming peers periodically
-      const reShare = setInterval(() => {
-        const m = meshRef.current;
-        if (!m) return;
-        for (const mk of map.values()) {
-          m.broadcast({ t: "marker", m: mk });
-        }
-      }, 15000);
-
-      // Geolocation
-      if ("geolocation" in navigator) {
-        geoWatchId = navigator.geolocation.watchPosition(
-          async (g) => {
-            let battery: number | null = null;
-            type NavWithBattery = Navigator & { getBattery?: () => Promise<{ level: number }> };
-            const nb = navigator as NavWithBattery;
-            if (typeof nb.getBattery === "function") {
-              try {
-                const b = await nb.getBattery();
-                battery = Math.round(b.level * 100);
-              } catch {
-                // ignore
-              }
-            }
-            const pos: Position = {
-              lat: g.coords.latitude,
-              lng: g.coords.longitude,
-              accuracy: g.coords.accuracy,
-              heading: g.coords.heading,
-              speed: g.coords.speed,
-              battery,
-              ts: Date.now(),
-            };
-            setSelfPos(pos);
-            // Throttle: every 3s OR if moved >5m
-            const last = lastBroadcastRef.current;
-            const moved = last.pos
-              ? haversineMeters(last.pos, pos) > 5
-              : true;
-            if (Date.now() - last.ts > 3000 || moved) {
-              lastBroadcastRef.current = { pos, ts: Date.now() };
-              meshRef.current?.broadcast({ t: "pos", id: id.id, pos });
-            }
-          },
-          (err) => console.warn("geolocation error", err.message),
-          { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 },
-        );
+      setMeshError(null);
+      if (bootstrapPeerId) {
+        mesh.connectTo(bootstrapPeerId);
       }
 
-      return () => clearInterval(reShare);
+      // Re-broadcast known markers to incoming peers periodically
+        reShare = setInterval(() => {
+          const m = meshRef.current;
+          if (!m) return;
+          for (const mk of map.values()) {
+            m.broadcast({ t: "marker", m: mk });
+          }
+        }, 15000);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Unable to start encrypted mesh.";
+        setMeshError(msg);
+        console.warn("mesh bootstrap failed", e);
+      }
+
     })();
 
     return () => {
       cancelled = true;
       if (geoWatchId !== null) navigator.geolocation.clearWatch(geoWatchId);
+      if (reShare) clearInterval(reShare);
       meshRef.current?.destroy();
       meshRef.current = null;
       if (wakeLockRef.current) {
@@ -178,7 +232,7 @@ function RoomPage() {
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [code, keyB64]);
+  }, [code, keyB64, bootstrapPeerId]);
 
   const handleIncoming = useCallback(
     async (msg: WireMessage, fromPeerId: string) => {
@@ -324,13 +378,14 @@ function RoomPage() {
 
   const inviteUrl = useMemo(() => {
     if (typeof window === "undefined") return "";
-    return `${window.location.origin}/join?c=${code}&k=${encodeURIComponent(keyB64)}`;
-  }, [code, keyB64]);
+    const p = meshSelfId ? `&p=${encodeURIComponent(meshSelfId)}` : "";
+    return `${window.location.origin}/join?c=${code}&k=${encodeURIComponent(keyB64)}${p}`;
+  }, [code, keyB64, meshSelfId]);
 
   const qrPayload = useMemo(() => {
-    if (inviteUrl) return inviteUrl;
-    return `tactrack://join?c=${code}&k=${encodeURIComponent(keyB64)}`;
-  }, [inviteUrl, code, keyB64]);
+    if (!meshSelfId) return "";
+    return inviteUrl;
+  }, [inviteUrl, meshSelfId]);
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-background text-foreground">
@@ -464,7 +519,12 @@ function RoomPage() {
       {/* Stale notice */}
       {!selfPos && (
         <div className="pointer-events-none absolute inset-x-0 top-20 z-10 mx-auto w-fit rounded-md bg-card/90 px-3 py-1.5 text-xs text-muted-foreground backdrop-blur">
-          Waiting for GPS lock…
+          {geoError ? `GPS unavailable: ${geoError}` : "Waiting for GPS lock…"}
+        </div>
+      )}
+      {meshError && (
+        <div className="pointer-events-none absolute inset-x-0 top-32 z-10 mx-auto w-fit max-w-[90vw] rounded-md bg-card/90 px-3 py-1.5 text-xs text-muted-foreground backdrop-blur">
+          Mesh issue: {meshError}
         </div>
       )}
 
@@ -476,7 +536,13 @@ function RoomPage() {
           </DialogHeader>
           <div className="flex flex-col items-center gap-4 py-2">
             <div className="rounded-lg bg-[#39FF14] p-3">
-              <QrCode value={qrPayload} size={220} />
+              {qrPayload ? (
+                <QrCode value={qrPayload} size={220} />
+              ) : (
+                <div className="grid h-[220px] w-[220px] place-items-center rounded-lg bg-black/10 px-4 text-center text-xs font-semibold uppercase tracking-wider text-[#0c1220]">
+                  Preparing secure invite...
+                </div>
+              )}
             </div>
             <div className="text-center">
               <div className="font-mono text-2xl font-bold tracking-[0.4em]">{code}</div>
@@ -487,6 +553,7 @@ function RoomPage() {
             <Button
               variant="secondary"
               className="w-full"
+              disabled={!qrPayload}
               onClick={() => {
                 navigator.clipboard.writeText(inviteUrl);
               }}

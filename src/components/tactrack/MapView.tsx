@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import maplibregl, { type LngLatLike, type Map as MlMap } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { PeerState, SharedMarker, Identity, Position } from "@/lib/tactrack/types";
@@ -49,6 +49,7 @@ function arrowSvg(color: string, heading: number | null | undefined, isSelf: boo
 }
 
 export function MapView(props: Props) {
+  const [iframeFallback, setIframeFallback] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MlMap | null>(null);
   const peerMarkersRef = useRef<Map<string, maplibregl.Marker>>(new Map());
@@ -59,12 +60,33 @@ export function MapView(props: Props) {
   // Init
   useEffect(() => {
     if (!containerRef.current) return;
-    const map = new maplibregl.Map({
-      container: containerRef.current,
-      style: STYLE_URL,
-      center: [12.4964, 41.9028],
-      zoom: 4,
-      attributionControl: { compact: true },
+    if (typeof maplibregl.supported === "function" && !maplibregl.supported()) {
+      setIframeFallback(true);
+      return;
+    }
+
+    let map: MlMap;
+    try {
+      map = new maplibregl.Map({
+        container: containerRef.current,
+        style: STYLE_URL,
+        center: [12.4964, 41.9028],
+        zoom: 4,
+        attributionControl: { compact: true },
+      });
+    } catch (e) {
+      console.warn("map init failed", e);
+      setIframeFallback(true);
+      return;
+    }
+
+    let loaded = false;
+    const hardFallbackTimeout = setTimeout(() => {
+      if (!loaded) setIframeFallback(true);
+    }, 12000);
+    map.once("idle", () => {
+      loaded = true;
+      clearTimeout(hardFallbackTimeout);
     });
     map.addControl(new maplibregl.NavigationControl({ visualizePitch: false }), "top-right");
     mapRef.current = map;
@@ -118,6 +140,7 @@ export function MapView(props: Props) {
     });
 
     return () => {
+      clearTimeout(hardFallbackTimeout);
       map.remove();
       mapRef.current = null;
     };
@@ -236,6 +259,29 @@ export function MapView(props: Props) {
     const c: LngLatLike = [props.centerRequest.lng, props.centerRequest.lat];
     map.flyTo({ center: c, zoom: Math.max(map.getZoom(), 15), speed: 1.2 });
   }, [props.centerRequest]);
+
+  const iframeSrc = useMemo(() => {
+    const lat = props.selfPos?.lat ?? props.centerRequest?.lat ?? 41.9028;
+    const lng = props.selfPos?.lng ?? props.centerRequest?.lng ?? 12.4964;
+    const delta = 0.06;
+    const minLon = (lng - delta).toFixed(6);
+    const minLat = (lat - delta).toFixed(6);
+    const maxLon = (lng + delta).toFixed(6);
+    const maxLat = (lat + delta).toFixed(6);
+    return `https://www.openstreetmap.org/export/embed.html?bbox=${minLon}%2C${minLat}%2C${maxLon}%2C${maxLat}&layer=mapnik&marker=${lat.toFixed(6)}%2C${lng.toFixed(6)}`;
+  }, [props.selfPos, props.centerRequest]);
+
+  if (iframeFallback) {
+    return (
+      <iframe
+        title="map-fallback"
+        src={iframeSrc}
+        className="absolute inset-0 h-full w-full border-0"
+        loading="lazy"
+        referrerPolicy="no-referrer-when-downgrade"
+      />
+    );
+  }
 
   return <div ref={containerRef} className="absolute inset-0" />;
 }
