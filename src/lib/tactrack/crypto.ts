@@ -38,7 +38,13 @@ export async function exportKey(key: CryptoKey): Promise<string> {
 
 export async function importKey(b64: string): Promise<CryptoKey> {
   const raw = b64urlDecode(b64);
-  return crypto.subtle.importKey("raw", raw, "AES-GCM", true, ["encrypt", "decrypt"]);
+  return crypto.subtle.importKey(
+    "raw",
+    raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength) as ArrayBuffer,
+    "AES-GCM",
+    true,
+    ["encrypt", "decrypt"],
+  );
 }
 
 export async function encryptJSON(key: CryptoKey, obj: unknown): Promise<string> {
@@ -53,8 +59,9 @@ export async function encryptJSON(key: CryptoKey, obj: unknown): Promise<string>
 
 export async function decryptJSON<T = unknown>(key: CryptoKey, b64: string): Promise<T> {
   const buf = b64urlDecode(b64);
-  const iv = buf.slice(0, 12);
-  const ct = buf.slice(12);
+  const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
+  const iv = ab.slice(0, 12);
+  const ct = ab.slice(12);
   const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ct);
   return JSON.parse(new TextDecoder().decode(pt)) as T;
 }
