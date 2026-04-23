@@ -38,6 +38,29 @@ import { PALETTE, bearingDeg, formatDistance, formatRelative, haversineMeters } 
 
 const search = z.object({ k: z.string(), p: z.string().optional() });
 
+const ROME_DEFAULT = { lat: 41.9028, lng: 12.4964 } as const;
+
+function createRomeFallbackPosition(): Position {
+  return {
+    lat: ROME_DEFAULT.lat,
+    lng: ROME_DEFAULT.lng,
+    accuracy: 5000,
+    heading: null,
+    speed: null,
+    ts: Date.now(),
+  };
+}
+
+function toHeading(value: number | null): number | null {
+  if (value === null || Number.isNaN(value)) return null;
+  return value;
+}
+
+function toSpeed(value: number | null): number | null {
+  if (value === null || Number.isNaN(value)) return null;
+  return value;
+}
+
 export const Route = createFileRoute("/room/$code")({
   validateSearch: (s) => search.parse(s),
   head: ({ params }) => ({
@@ -57,7 +80,8 @@ function RoomPage() {
   const navigate = useNavigate();
 
   const [identity, setIdentity] = useState<Identity | null>(null);
-  const [selfPos, setSelfPos] = useState<Position | null>(null);
+  const [selfPos, setSelfPos] = useState<Position>(() => createRomeFallbackPosition());
+  const [hasGpsFix, setHasGpsFix] = useState(false);
   const [peers, setPeers] = useState<Map<string, PeerState>>(new Map());
   const [markers, setMarkers] = useState<Map<string, SharedMarker>>(new Map());
   const [followMe, setFollowMe] = useState(true);
@@ -104,12 +128,13 @@ function RoomPage() {
             lat: g.coords.latitude,
             lng: g.coords.longitude,
             accuracy: g.coords.accuracy,
-            heading: g.coords.heading,
-            speed: g.coords.speed,
+            heading: toHeading(g.coords.heading),
+            speed: toSpeed(g.coords.speed),
             battery,
             ts: Date.now(),
           };
           setGeoError(null);
+          setHasGpsFix(true);
           setSelfPos(pos);
           // Throttle: every 3s OR if moved >5m
           const last = lastBroadcastRef.current;
@@ -125,6 +150,26 @@ function RoomPage() {
           setGeoError(err.message || "Unable to read GPS position.");
         },
         { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 },
+      );
+
+      navigator.geolocation.getCurrentPosition(
+        (g) => {
+          const pos: Position = {
+            lat: g.coords.latitude,
+            lng: g.coords.longitude,
+            accuracy: g.coords.accuracy,
+            heading: toHeading(g.coords.heading),
+            speed: toSpeed(g.coords.speed),
+            ts: Date.now(),
+          };
+          setGeoError(null);
+          setHasGpsFix(true);
+          setSelfPos(pos);
+        },
+        (err) => {
+          setGeoError(err.message || "Unable to read GPS position.");
+        },
+        { enableHighAccuracy: true, maximumAge: 1000, timeout: 10000 },
       );
     };
 
@@ -518,9 +563,11 @@ function RoomPage() {
       </div>
 
       {/* Stale notice */}
-      {!selfPos && (
+      {!hasGpsFix && (
         <div className="pointer-events-none absolute inset-x-0 top-20 z-10 mx-auto w-fit rounded-md bg-card/90 px-3 py-1.5 text-xs text-muted-foreground backdrop-blur">
-          {geoError ? `GPS unavailable: ${geoError}` : "Waiting for GPS lock…"}
+          {geoError
+            ? `GPS unavailable (${geoError}). Showing default position: Rome.`
+            : "Waiting for GPS lock… Showing default position: Rome."}
         </div>
       )}
       {meshError && (
