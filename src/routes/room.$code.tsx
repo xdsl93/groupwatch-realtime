@@ -13,6 +13,7 @@ import {
   Download,
   LogOut,
   MapPin,
+  Layers3,
   Plus,
   QrCode as QrIcon,
   Sun,
@@ -21,7 +22,7 @@ import {
   Wifi,
   WifiOff,
 } from "lucide-react";
-import { MapView } from "@/components/tactrack/MapView";
+import { MapView, type BasemapMode } from "@/components/tactrack/MapView";
 import { MARKER_ICONS, MarkerIconView } from "@/components/tactrack/MarkerIcon";
 import { QrCode } from "@/components/tactrack/QrCode";
 import { ensureIdentity } from "@/lib/tactrack/identity";
@@ -84,6 +85,7 @@ function RoomPage() {
   const [hasGpsFix, setHasGpsFix] = useState(false);
   const [peers, setPeers] = useState<Map<string, PeerState>>(new Map());
   const [markers, setMarkers] = useState<Map<string, SharedMarker>>(new Map());
+  const [basemap, setBasemap] = useState<BasemapMode>("streets");
   const [followMe, setFollowMe] = useState(true);
   const [wakeLockOn, setWakeLockOn] = useState(false);
   const [showQr, setShowQr] = useState(false);
@@ -339,6 +341,7 @@ function RoomPage() {
   const markerArr = useMemo(() => Array.from(markers.values()), [markers]);
   const connectedCount = peerArr.filter((p) => p.connected).length;
   const mapIdentity: Identity = identity ?? { id: "local", callsign: "YOU", color: PALETTE[0] };
+  const basemapLabel = basemap === "streets" ? "STR" : basemap === "satellite" ? "SAT" : "CAR";
 
   // Tick to refresh "last seen" labels
   const [, setTick] = useState(0);
@@ -424,6 +427,14 @@ function RoomPage() {
     setFollowMe(true);
   }
 
+  function cycleBasemap() {
+    setBasemap((prev) => {
+      if (prev === "streets") return "satellite";
+      if (prev === "satellite") return "cartographic";
+      return "streets";
+    });
+  }
+
   const inviteUrl = useMemo(() => {
     if (typeof window === "undefined") return "";
     const p = meshSelfId ? `&p=${encodeURIComponent(meshSelfId)}` : "";
@@ -442,6 +453,7 @@ function RoomPage() {
         selfPos={selfPos}
         peers={peerArr}
         markers={markerArr}
+        basemap={basemap}
         followMe={followMe}
         onLongPress={dropMarker}
         onMarkerClick={(id) => {
@@ -477,6 +489,16 @@ function RoomPage() {
             aria-label="Share QR"
           >
             <QrIcon className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            className="h-8 gap-1 px-2 text-[10px] font-mono font-bold tracking-wider"
+            onClick={cycleBasemap}
+            aria-label="Switch basemap"
+            title="Switch basemap"
+          >
+            <Layers3 className="h-3.5 w-3.5" />
+            {basemapLabel}
           </Button>
           <Sheet>
             <SheetTrigger asChild>

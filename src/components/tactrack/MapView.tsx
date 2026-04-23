@@ -10,6 +10,7 @@ type Props = {
   selfPos: Position | null;
   peers: PeerState[];
   markers: SharedMarker[];
+  basemap: BasemapMode;
   followMe: boolean;
   onLongPress: (lat: number, lng: number) => void;
   onMarkerClick: (markerId: string) => void;
@@ -18,7 +19,21 @@ type Props = {
 };
 
 const PRIMARY_STYLE_URL = "https://demotiles.maplibre.org/style.json";
-const FALLBACK_STYLE = {
+const SATELLITE_STYLE = {
+  version: 8,
+  sources: {
+    esri: {
+      type: "raster",
+      tiles: [
+        "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+      ],
+      tileSize: 256,
+      attribution: "(c) Esri, Maxar, Earthstar Geographics, and the GIS User Community",
+    },
+  },
+  layers: [{ id: "esri-satellite", type: "raster", source: "esri" }],
+};
+const CARTOGRAPHIC_STYLE = {
   version: 8,
   sources: {
     carto: {
@@ -32,8 +47,16 @@ const FALLBACK_STYLE = {
       attribution: "(c) OpenStreetMap contributors (c) CARTO",
     },
   },
-  layers: [{ id: "carto", type: "raster", source: "carto" }],
+  layers: [{ id: "carto-dark", type: "raster", source: "carto" }],
 };
+
+export type BasemapMode = "streets" | "satellite" | "cartographic";
+
+function getStyleForBasemap(mode: BasemapMode): string | object {
+  if (mode === "satellite") return JSON.parse(JSON.stringify(SATELLITE_STYLE));
+  if (mode === "cartographic") return JSON.parse(JSON.stringify(CARTOGRAPHIC_STYLE));
+  return PRIMARY_STYLE_URL;
+}
 
 function arrowSvg(color: string, heading: number | null | undefined, isSelf: boolean) {
   const rot = heading ?? 0;
@@ -68,7 +91,7 @@ export function MapView(props: Props) {
     try {
       map = new maplibregl.Map({
         container: containerRef.current,
-        style: PRIMARY_STYLE_URL,
+        style: getStyleForBasemap(props.basemap),
         center: [12.4964, 41.9028], // Rome default
         zoom: 11,
         attributionControl: { compact: true },
@@ -87,7 +110,7 @@ export function MapView(props: Props) {
     const applyFallbackStyle = () => {
       if (fallbackApplied || !mapRef.current) return;
       fallbackApplied = true;
-      mapRef.current.setStyle(FALLBACK_STYLE);
+      mapRef.current.setStyle(CARTOGRAPHIC_STYLE);
     };
 
     map.on("error", (event) => {
@@ -139,6 +162,17 @@ export function MapView(props: Props) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    try {
+      map.setStyle(getStyleForBasemap(props.basemap));
+    } catch (e) {
+      console.warn("basemap switch failed", e);
+      map.setStyle(CARTOGRAPHIC_STYLE);
+    }
+  }, [props.basemap]);
 
   useEffect(() => {
     const map = mapRef.current;
