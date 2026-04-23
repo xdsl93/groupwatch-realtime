@@ -1,0 +1,14 @@
+{
+  "name": "TacTrack — Group Tracker",
+  "short_name": "TacTrack",
+  "description": "Serverless P2P live position sharing for small teams.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0c1220",
+  "theme_color": "#0c1220",
+  "orientation": "any",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
