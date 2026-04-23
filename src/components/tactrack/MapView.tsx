@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import maplibregl, { type LngLatLike, type Map as MlMap } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import type { PeerState, SharedMarker, Identity, Position } from "@/lib/tactrack/types";
-import { MARKER_ICONS } from "./MarkerIcon";
+import type { Identity, PeerState, Position, SharedMarker } from "@/lib/tactrack/types";
 import { renderToStaticMarkup } from "react-dom/server";
+import { MARKER_ICONS } from "./MarkerIcon";
 
 type Props = {
   self: Identity;
@@ -17,26 +17,29 @@ type Props = {
   centerRequest?: { lat: number; lng: number; ts: number } | null;
 };
 
+const PRIMARY_STYLE_URL = "https://demotiles.maplibre.org/style.json";
 const FALLBACK_STYLE = {
   version: 8,
   sources: {
-    osm: {
+    carto: {
       type: "raster",
       tiles: [
-        "https://a.tile.openstreetmap.org/{z}/{x}/{y}.png",
-        "https://b.tile.openstreetmap.org/{z}/{x}/{y}.png",
-        "https://c.tile.openstreetmap.org/{z}/{x}/{y}.png",
+        "https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
+        "https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
+        "https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
       ],
       tileSize: 256,
-      attribution: "© OpenStreetMap contributors",
+      attribution: "(c) OpenStreetMap contributors (c) CARTO",
     },
   },
-  layers: [{ id: "osm", type: "raster", source: "osm" }],
+  layers: [{ id: "carto", type: "raster", source: "carto" }],
 };
 
 function arrowSvg(color: string, heading: number | null | undefined, isSelf: boolean) {
   const rot = heading ?? 0;
-  const ring = isSelf ? `<circle cx="20" cy="20" r="18" fill="none" stroke="${color}" stroke-width="2" opacity="0.5"/>` : "";
+  const ring = isSelf
+    ? `<circle cx="20" cy="20" r="18" fill="none" stroke="${color}" stroke-width="2" opacity="0.5"/>`
+    : "";
   return `
     <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40">
       ${ring}
@@ -48,7 +51,6 @@ function arrowSvg(color: string, heading: number | null | undefined, isSelf: boo
 }
 
 export function MapView(props: Props) {
-  const [iframeFallback, setIframeFallback] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MlMap | null>(null);
   const peerMarkersRef = useRef<Map<string, maplibregl.Marker>>(new Map());
@@ -56,11 +58,9 @@ export function MapView(props: Props) {
   const selfMarkerRef = useRef<maplibregl.Marker | null>(null);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Init
   useEffect(() => {
     if (!containerRef.current) return;
     if (typeof maplibregl.supported === "function" && !maplibregl.supported()) {
-      setIframeFallback(true);
       return;
     }
 
@@ -68,29 +68,22 @@ export function MapView(props: Props) {
     try {
       map = new maplibregl.Map({
         container: containerRef.current,
-        style: FALLBACK_STYLE,
-        center: [12.4964, 41.9028],
-        zoom: 4,
+        style: PRIMARY_STYLE_URL,
+        center: [12.4964, 41.9028], // Rome default
+        zoom: 11,
         attributionControl: { compact: true },
       });
     } catch (e) {
       console.warn("map init failed", e);
-      setIframeFallback(true);
       return;
     }
 
-    let loaded = false;
-    const hardFallbackTimeout = setTimeout(() => {
-      if (!loaded) setIframeFallback(true);
-    }, 12000);
-    map.once("idle", () => {
-      loaded = true;
-      clearTimeout(hardFallbackTimeout);
-    });
     map.addControl(new maplibregl.NavigationControl({ visualizePitch: false }), "top-right");
     mapRef.current = map;
-    let fallbackApplied = false;
+    requestAnimationFrame(() => map.resize());
+    map.on("load", () => map.resize());
 
+    let fallbackApplied = false;
     const applyFallbackStyle = () => {
       if (fallbackApplied || !mapRef.current) return;
       fallbackApplied = true;
@@ -98,8 +91,9 @@ export function MapView(props: Props) {
     };
 
     map.on("error", (event) => {
-      const message = ((event as { error?: { message?: string } }).error?.message ?? "").toLowerCase();
-      // If style/glyph/sprite/tile fetch fails, switch to a resilient raster fallback.
+      const message = (
+        (event as { error?: { message?: string } }).error?.message ?? ""
+      ).toLowerCase();
       if (
         message.includes("style") ||
         message.includes("sprite") ||
@@ -107,13 +101,14 @@ export function MapView(props: Props) {
         message.includes("source") ||
         message.includes("tile") ||
         message.includes("fetch") ||
-        message.includes("network")
+        message.includes("network") ||
+        message.includes("cors") ||
+        message.includes("cross-origin")
       ) {
         applyFallbackStyle();
       }
     });
 
-    // Long-press / right-click to drop marker
     const startLongPress = (lngLat: maplibregl.LngLat) => {
       if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
       longPressTimerRef.current = setTimeout(() => {
@@ -139,14 +134,12 @@ export function MapView(props: Props) {
     });
 
     return () => {
-      clearTimeout(hardFallbackTimeout);
       map.remove();
       mapRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Self marker
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !props.selfPos) return;
@@ -155,11 +148,7 @@ export function MapView(props: Props) {
     if (selfMarkerRef.current) {
       selfMarkerRef.current
         .setLngLat([props.selfPos.lng, props.selfPos.lat])
-        .getElement().innerHTML = arrowSvg(
-          props.self.color,
-          props.selfPos.heading ?? null,
-          true,
-        );
+        .getElement().innerHTML = arrowSvg(props.self.color, props.selfPos.heading ?? null, true);
     } else {
       selfMarkerRef.current = new maplibregl.Marker({ element: el, anchor: "center" })
         .setLngLat([props.selfPos.lng, props.selfPos.lat])
@@ -170,7 +159,6 @@ export function MapView(props: Props) {
     }
   }, [props.selfPos, props.self.color, props.followMe]);
 
-  // Peers
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -199,7 +187,6 @@ export function MapView(props: Props) {
         m.getElement().innerHTML = html;
       }
     }
-    // Remove gone peers
     for (const [id, m] of peerMarkersRef.current) {
       if (!seen.has(id)) {
         m.remove();
@@ -208,7 +195,6 @@ export function MapView(props: Props) {
     }
   }, [props.peers, props.onPeerClick]);
 
-  // Shared markers
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -251,7 +237,6 @@ export function MapView(props: Props) {
     }
   }, [props.markers, props.onMarkerClick]);
 
-  // Center request (e.g. tap on roster)
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !props.centerRequest) return;
@@ -259,30 +244,7 @@ export function MapView(props: Props) {
     map.flyTo({ center: c, zoom: Math.max(map.getZoom(), 15), speed: 1.2 });
   }, [props.centerRequest]);
 
-  const iframeSrc = useMemo(() => {
-    const lat = props.selfPos?.lat ?? props.centerRequest?.lat ?? 41.9028;
-    const lng = props.selfPos?.lng ?? props.centerRequest?.lng ?? 12.4964;
-    const delta = 0.06;
-    const minLon = (lng - delta).toFixed(6);
-    const minLat = (lat - delta).toFixed(6);
-    const maxLon = (lng + delta).toFixed(6);
-    const maxLat = (lat + delta).toFixed(6);
-    return `https://www.openstreetmap.org/export/embed.html?bbox=${minLon}%2C${minLat}%2C${maxLon}%2C${maxLat}&layer=mapnik&marker=${lat.toFixed(6)}%2C${lng.toFixed(6)}`;
-  }, [props.selfPos, props.centerRequest]);
-
-  if (iframeFallback) {
-    return (
-      <iframe
-        title="map-fallback"
-        src={iframeSrc}
-        className="absolute inset-0 h-full w-full border-0"
-        loading="lazy"
-        referrerPolicy="no-referrer-when-downgrade"
-      />
-    );
-  }
-
-  return <div ref={containerRef} className="absolute inset-0" />;
+  return <div ref={containerRef} className="absolute inset-0" style={{ width: "100%", height: "100%" }} />;
 }
 
 function escapeHtml(s: string) {
