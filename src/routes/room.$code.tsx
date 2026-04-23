@@ -165,12 +165,14 @@ function RoomPage() {
         const mesh = new Mesh(code, keyB64, id, {
         onSelfId: (peerId) => {
           setMeshSelfId(peerId);
+          setMeshError(null);
         },
         onError: (e) => {
           setMeshError(e.message || "Mesh connection failed.");
           console.warn("mesh error", e);
         },
         onPeerConnected: (peerId) => {
+          setMeshError(null);
           setPeers((prev) => {
             const next = new Map(prev);
             const ex = next.get(peerId);
@@ -291,6 +293,7 @@ function RoomPage() {
   const peerArr = useMemo(() => Array.from(peers.values()), [peers]);
   const markerArr = useMemo(() => Array.from(markers.values()), [markers]);
   const connectedCount = peerArr.filter((p) => p.connected).length;
+  const mapIdentity: Identity = identity ?? { id: "local", callsign: "YOU", color: PALETTE[0] };
 
   // Tick to refresh "last seen" labels
   const [, setTick] = useState(0);
@@ -389,25 +392,23 @@ function RoomPage() {
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-background text-foreground">
-      {identity && (
-        <MapView
-          self={identity}
-          selfPos={selfPos}
-          peers={peerArr}
-          markers={markerArr}
-          followMe={followMe}
-          onLongPress={dropMarker}
-          onMarkerClick={(id) => {
-            const m = markers.get(id);
-            if (m) setEditingMarker(m);
-          }}
-          onPeerClick={(peerId) => {
-            const p = peers.get(peerId);
-            if (p) centerOnPeer(p);
-          }}
-          centerRequest={centerReq}
-        />
-      )}
+      <MapView
+        self={mapIdentity}
+        selfPos={selfPos}
+        peers={peerArr}
+        markers={markerArr}
+        followMe={followMe}
+        onLongPress={dropMarker}
+        onMarkerClick={(id) => {
+          const m = markers.get(id);
+          if (m) setEditingMarker(m);
+        }}
+        onPeerClick={(peerId) => {
+          const p = peers.get(peerId);
+          if (p) centerOnPeer(p);
+        }}
+        centerRequest={centerReq}
+      />
 
       {/* Top bar */}
       <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-center p-3">

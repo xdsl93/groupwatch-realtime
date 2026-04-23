@@ -17,7 +17,6 @@ type Props = {
   centerRequest?: { lat: number; lng: number; ts: number } | null;
 };
 
-const STYLE_URL = "https://tiles.openfreemap.org/styles/dark";
 const FALLBACK_STYLE = {
   version: 8,
   sources: {
@@ -69,7 +68,7 @@ export function MapView(props: Props) {
     try {
       map = new maplibregl.Map({
         container: containerRef.current,
-        style: STYLE_URL,
+        style: FALLBACK_STYLE,
         center: [12.4964, 41.9028],
         zoom: 4,
         attributionControl: { compact: true },

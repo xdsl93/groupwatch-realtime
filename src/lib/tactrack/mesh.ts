@@ -27,8 +27,10 @@ export class Mesh {
   private key: CryptoKey | null = null;
   private conns = new Map<string, DataConnection>();
   private knownPeerIds = new Set<string>();
+  private pendingConnectIds = new Set<string>();
   private suffix = randomSuffix();
   private destroyed = false;
+  private opened = false;
 
   constructor(
     private roomCode: string,
@@ -40,51 +42,88 @@ export class Mesh {
   async start() {
     this.key = await importKey(this.keyB64);
     const selfId = roomPeerId(this.roomCode, this.suffix);
-    this.peer = new Peer(selfId, { debug: 1 });
-
-    this.peer.on("open", (id) => {
-      this.handlers.onSelfId(id);
-      // Try to discover existing peers by scanning a small id space.
-      // Practical approach: rely on others connecting to us when they join,
-      // and broadcast our presence via PeerJS list when supported.
-      this.discover();
+    this.peer = new Peer(selfId, {
+      debug: 1,
+      host: "0.peerjs.com",
+      port: 443,
+      path: "/",
+      secure: true,
+      config: {
+        iceServers: [
+          { urls: "stun:stun.l.google.com:19302" },
+          { urls: "stun:stun1.l.google.com:19302" },
+        ],
+      },
     });
 
-    this.peer.on("connection", (conn) => this.attachConn(conn));
-    this.peer.on("error", (err) => {
-      // "peer-unavailable" is expected during discovery scans
-      if ((err as { type?: string }).type === "peer-unavailable") return;
-      this.handlers.onError(err as Error);
-    });
-  }
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const timeout = setTimeout(() => {
+        if (settled || this.destroyed) return;
+        settled = true;
+        reject(new Error("Timed out connecting to mesh broker."));
+      }, 12000);
 
-  private discover() {
-    if (!this.peer) return;
-    // PeerJS provides listAllPeers on the default cloud broker.
-    type PeerWithList = Peer & { listAllPeers: (cb: (ids: string[]) => void) => void };
-    const p = this.peer as PeerWithList;
-    if (typeof p.listAllPeers === "function") {
-      p.listAllPeers((ids: string[]) => {
-        const prefix = `tactrack-${this.roomCode.toLowerCase()}-`;
-        for (const id of ids) {
-          if (id.startsWith(prefix) && id !== this.peer!.id) {
-            this.connectTo(id);
-          }
+      const settleResolve = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        resolve();
+      };
+
+      const settleReject = (err: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        reject(err);
+      };
+
+      this.peer!.on("open", (id) => {
+        this.opened = true;
+        this.handlers.onSelfId(id);
+        this.flushPendingConnects();
+        settleResolve();
+      });
+
+      this.peer!.on("connection", (conn) => this.attachConn(conn));
+
+      this.peer!.on("error", (err) => {
+        const type = (err as { type?: string }).type ?? "";
+        // Non-fatal when dialing peers that may be offline.
+        if (type === "peer-unavailable") return;
+
+        this.handlers.onError(err as Error);
+
+        // Before initial open, this is a hard startup failure.
+        if (!this.opened) {
+          const message =
+            (err as { message?: string }).message ||
+            "Mesh connection failed.";
+          settleReject(new Error(message));
         }
       });
-    }
-    // Re-scan periodically to catch new joiners
-    setTimeout(() => {
-      if (!this.destroyed) this.discover();
-    }, 8000);
+    });
   }
 
   connectTo(peerId: string) {
-    if (this.destroyed || !this.peer) return;
-    if (peerId === this.peer.id) return;
-    if (this.conns.has(peerId)) return;
-    const conn = this.peer.connect(peerId, { reliable: true });
+    const target = peerId.trim();
+    if (!target) return;
+    if (this.destroyed) return;
+    if (!this.peer || !this.opened) {
+      this.pendingConnectIds.add(target);
+      return;
+    }
+    if (target === this.peer.id) return;
+    if (this.conns.has(target)) return;
+    const conn = this.peer.connect(target, { reliable: true });
     this.attachConn(conn);
+  }
+
+  private flushPendingConnects() {
+    if (!this.pendingConnectIds.size) return;
+    const ids = Array.from(this.pendingConnectIds);
+    this.pendingConnectIds.clear();
+    for (const id of ids) this.connectTo(id);
   }
 
   private attachConn(conn: DataConnection) {
@@ -147,6 +186,8 @@ export class Mesh {
 
   destroy() {
     this.destroyed = true;
+    this.opened = false;
+    this.pendingConnectIds.clear();
     for (const c of this.conns.values()) c.close();
     this.conns.clear();
     this.peer?.destroy();
