@@ -1,5 +1,9 @@
 import { useEffect, useRef } from "react";
-import maplibregl, { type LngLatLike, type Map as MlMap } from "maplibre-gl";
+import maplibregl, {
+  type LngLatLike,
+  type Map as MlMap,
+  type StyleSpecification,
+} from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { Identity, PeerState, Position, SharedMarker } from "@/lib/tactrack/types";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -19,7 +23,7 @@ type Props = {
 };
 
 const PRIMARY_STYLE_URL = "https://demotiles.maplibre.org/style.json";
-const SATELLITE_STYLE = {
+const SATELLITE_STYLE: StyleSpecification = {
   version: 8,
   sources: {
     esri: {
@@ -33,7 +37,7 @@ const SATELLITE_STYLE = {
   },
   layers: [{ id: "esri-satellite", type: "raster", source: "esri" }],
 };
-const CARTOGRAPHIC_STYLE = {
+const CARTOGRAPHIC_STYLE: StyleSpecification = {
   version: 8,
   sources: {
     carto: {
@@ -52,9 +56,10 @@ const CARTOGRAPHIC_STYLE = {
 
 export type BasemapMode = "streets" | "satellite" | "cartographic";
 
-function getStyleForBasemap(mode: BasemapMode): string | object {
-  if (mode === "satellite") return JSON.parse(JSON.stringify(SATELLITE_STYLE));
-  if (mode === "cartographic") return JSON.parse(JSON.stringify(CARTOGRAPHIC_STYLE));
+function getStyleForBasemap(mode: BasemapMode): string | StyleSpecification {
+  if (mode === "satellite") return JSON.parse(JSON.stringify(SATELLITE_STYLE)) as StyleSpecification;
+  if (mode === "cartographic")
+    return JSON.parse(JSON.stringify(CARTOGRAPHIC_STYLE)) as StyleSpecification;
   return PRIMARY_STYLE_URL;
 }
 
@@ -83,9 +88,6 @@ export function MapView(props: Props) {
 
   useEffect(() => {
     if (!containerRef.current) return;
-    if (typeof maplibregl.supported === "function" && !maplibregl.supported()) {
-      return;
-    }
 
     let map: MlMap;
     try {

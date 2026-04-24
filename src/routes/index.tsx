@@ -5,13 +5,19 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Plus, LogIn, Radio, Settings as SettingsIcon, Trash2, Clock } from "lucide-react";
+import { Plus, LogIn, Radio, Settings as SettingsIcon, Trash2, Clock, Download } from "lucide-react";
 import { ensureIdentity } from "@/lib/tactrack/identity";
 import { deleteRoom, listRooms, saveRoom, setIdentity } from "@/lib/tactrack/db";
 import { generateKey, exportKey, randomCode } from "@/lib/tactrack/crypto";
 import type { Identity, RoomInfo } from "@/lib/tactrack/types";
 import { PALETTE, formatRelative } from "@/lib/tactrack/geo";
 import { useNavigate } from "@tanstack/react-router";
+
+type BeforeInstallPromptEvent = Event & {
+  readonly platforms: string[];
+  readonly userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
+  prompt: () => Promise<void>;
+};
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -28,6 +34,8 @@ function Index() {
   const [identity, setIdent] = useState<Identity | null>(null);
   const [rooms, setRooms] = useState<RoomInfo[]>([]);
   const [joinCode, setJoinCode] = useState("");
+  const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
+  const [isStandalone, setIsStandalone] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -36,6 +44,45 @@ function Index() {
       setRooms(await listRooms());
     })();
   }, []);
+
+  useEffect(() => {
+    const standalone =
+      window.matchMedia?.("(display-mode: standalone)").matches ||
+      // iOS Safari
+      (navigator as Navigator & { standalone?: boolean }).standalone === true;
+    setIsStandalone(!!standalone);
+    const onPrompt = (e: Event) => {
+      e.preventDefault();
+      setInstallPrompt(e as BeforeInstallPromptEvent);
+    };
+    const onInstalled = () => {
+      setInstallPrompt(null);
+      setIsStandalone(true);
+    };
+    window.addEventListener("beforeinstallprompt", onPrompt);
+    window.addEventListener("appinstalled", onInstalled);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", onPrompt);
+      window.removeEventListener("appinstalled", onInstalled);
+    };
+  }, []);
+
+  async function installApp() {
+    if (installPrompt) {
+      await installPrompt.prompt();
+      try {
+        await installPrompt.userChoice;
+      } catch {
+        // ignore
+      }
+      setInstallPrompt(null);
+      return;
+    }
+    // iOS / browsers without prompt support
+    alert(
+      "Per installare:\n\n• iOS Safari: tocca Condividi → 'Aggiungi a Home'.\n• Android Chrome: menu ⋮ → 'Installa app'.\n• Desktop: icona di installazione nella barra degli indirizzi.",
+    );
+  }
 
   async function createRoom() {
     const code = randomCode(6);
@@ -96,9 +143,22 @@ function Index() {
               </p>
             </div>
           </div>
-          <Badge variant="outline" className="font-mono text-[10px] uppercase">
-            Serverless
-          </Badge>
+          <div className="flex items-center gap-2">
+            {!isStandalone && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={installApp}
+                className="h-8 gap-1.5 font-mono text-[10px] uppercase tracking-wider"
+              >
+                <Download className="h-3.5 w-3.5" />
+                Installa app
+              </Button>
+            )}
+            <Badge variant="outline" className="font-mono text-[10px] uppercase">
+              Serverless
+            </Badge>
+          </div>
         </header>
 
         {/* Identity */}
