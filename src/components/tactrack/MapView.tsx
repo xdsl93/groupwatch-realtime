@@ -22,7 +22,23 @@ type Props = {
   centerRequest?: { lat: number; lng: number; ts: number } | null;
 };
 
-const PRIMARY_STYLE_URL = "https://demotiles.maplibre.org/style.json";
+const OSM_STREETS_STYLE: StyleSpecification = {
+  version: 8,
+  sources: {
+    osm: {
+      type: "raster",
+      tiles: [
+        "https://a.tile.openstreetmap.org/{z}/{x}/{y}.png",
+        "https://b.tile.openstreetmap.org/{z}/{x}/{y}.png",
+        "https://c.tile.openstreetmap.org/{z}/{x}/{y}.png",
+      ],
+      tileSize: 256,
+      attribution: "(c) OpenStreetMap contributors",
+      maxzoom: 19,
+    },
+  },
+  layers: [{ id: "osm-streets", type: "raster", source: "osm" }],
+};
 const SATELLITE_STYLE: StyleSpecification = {
   version: 8,
   sources: {
@@ -32,35 +48,36 @@ const SATELLITE_STYLE: StyleSpecification = {
         "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
       ],
       tileSize: 256,
-      attribution: "(c) Esri, Maxar, Earthstar Geographics, and the GIS User Community",
+      attribution: "(c) Esri, Maxar, Earthstar Geographics",
+      maxzoom: 19,
     },
   },
   layers: [{ id: "esri-satellite", type: "raster", source: "esri" }],
 };
-const CARTOGRAPHIC_STYLE: StyleSpecification = {
+const TOPO_STYLE: StyleSpecification = {
   version: 8,
   sources: {
-    carto: {
+    opentopo: {
       type: "raster",
       tiles: [
-        "https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
-        "https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
-        "https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
+        "https://a.tile.opentopomap.org/{z}/{x}/{y}.png",
+        "https://b.tile.opentopomap.org/{z}/{x}/{y}.png",
+        "https://c.tile.opentopomap.org/{z}/{x}/{y}.png",
       ],
       tileSize: 256,
-      attribution: "(c) OpenStreetMap contributors (c) CARTO",
+      attribution: "(c) OpenStreetMap contributors, SRTM | (c) OpenTopoMap (CC-BY-SA)",
+      maxzoom: 17,
     },
   },
-  layers: [{ id: "carto-dark", type: "raster", source: "carto" }],
+  layers: [{ id: "opentopo", type: "raster", source: "opentopo" }],
 };
 
-export type BasemapMode = "streets" | "satellite" | "cartographic";
+export type BasemapMode = "streets" | "satellite" | "topo";
 
-function getStyleForBasemap(mode: BasemapMode): string | StyleSpecification {
+function getStyleForBasemap(mode: BasemapMode): StyleSpecification {
   if (mode === "satellite") return JSON.parse(JSON.stringify(SATELLITE_STYLE)) as StyleSpecification;
-  if (mode === "cartographic")
-    return JSON.parse(JSON.stringify(CARTOGRAPHIC_STYLE)) as StyleSpecification;
-  return PRIMARY_STYLE_URL;
+  if (mode === "topo") return JSON.parse(JSON.stringify(TOPO_STYLE)) as StyleSpecification;
+  return JSON.parse(JSON.stringify(OSM_STREETS_STYLE)) as StyleSpecification;
 }
 
 function arrowSvg(color: string, heading: number | null | undefined, isSelf: boolean) {
@@ -112,7 +129,7 @@ export function MapView(props: Props) {
     const applyFallbackStyle = () => {
       if (fallbackApplied || !mapRef.current) return;
       fallbackApplied = true;
-      mapRef.current.setStyle(CARTOGRAPHIC_STYLE);
+      mapRef.current.setStyle(getStyleForBasemap("streets"));
     };
 
     map.on("error", (event) => {
@@ -172,7 +189,7 @@ export function MapView(props: Props) {
       map.setStyle(getStyleForBasemap(props.basemap));
     } catch (e) {
       console.warn("basemap switch failed", e);
-      map.setStyle(CARTOGRAPHIC_STYLE);
+      map.setStyle(getStyleForBasemap("streets"));
     }
   }, [props.basemap]);
 

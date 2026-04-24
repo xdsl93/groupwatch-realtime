@@ -93,12 +93,21 @@ function JoinPage() {
     }
 
     setError(null);
-    await saveRoom({ code: nextCode, keyB64: nextKey, createdAt: Date.now(), lastJoined: Date.now() });
-    navigate({
-      to: "/room/$code",
-      params: { code: nextCode },
-      search: nextPeerId ? { k: nextKey, p: nextPeerId } : { k: nextKey },
-    });
+    try {
+      await saveRoom({ code: nextCode, keyB64: nextKey, createdAt: Date.now(), lastJoined: Date.now() });
+    } catch (e) {
+      console.warn("saveRoom failed (continuing)", e);
+    }
+    try {
+      await navigate({
+        to: "/room/$code",
+        params: { code: nextCode },
+        search: nextPeerId ? { k: nextKey, p: nextPeerId } : { k: nextKey },
+      });
+    } catch (e) {
+      console.error("navigate to room failed", e);
+      setError(e instanceof Error ? e.message : "Failed to open room.");
+    }
   }
 
   function onScan(text: string) {
