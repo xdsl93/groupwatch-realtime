@@ -13,6 +13,12 @@ import type { Identity, RoomInfo } from "@/lib/tactrack/types";
 import { PALETTE, formatRelative } from "@/lib/tactrack/geo";
 import { useNavigate } from "@tanstack/react-router";
 
+type BeforeInstallPromptEvent = Event & {
+  readonly platforms: string[];
+  readonly userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
+  prompt: () => Promise<void>;
+};
+
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
