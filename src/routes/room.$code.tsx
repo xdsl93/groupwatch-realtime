@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   ArrowLeft,
   Battery,
@@ -30,7 +31,9 @@ import { Mesh } from "@/lib/tactrack/mesh";
 import { normalizeKeyB64 } from "@/lib/tactrack/crypto";
 import {
   getRoomMarkers,
+  getKnownPeers,
   putMarker,
+  rememberPeer,
   removeMarker,
   saveRoom,
 } from "@/lib/tactrack/db";
@@ -220,6 +223,8 @@ function RoomPage() {
         },
         onPeerConnected: (peerId) => {
           setMeshError(null);
+          // Remember this peer so we can re-dial on rejoin
+          rememberPeer(code, peerId).catch(() => {});
           setPeers((prev) => {
             const next = new Map(prev);
             const ex = next.get(peerId);
@@ -251,6 +256,14 @@ function RoomPage() {
       setMeshError(null);
       if (bootstrapPeerId) {
         mesh.connectTo(bootstrapPeerId);
+      }
+
+      // Re-dial peers we have connected to in previous sessions of this room.
+      try {
+        const known = await getKnownPeers(code);
+        for (const pid of known) mesh.connectTo(pid);
+      } catch {
+        // ignore
       }
 
       // Re-broadcast known markers to incoming peers periodically
@@ -427,13 +440,11 @@ function RoomPage() {
     setFollowMe(true);
   }
 
-  function cycleBasemap() {
-    setBasemap((prev) => {
-      if (prev === "streets") return "satellite";
-      if (prev === "satellite") return "cartographic";
-      return "streets";
-    });
-  }
+  const BASEMAP_OPTIONS: { value: BasemapMode; label: string; sub: string }[] = [
+    { value: "streets", label: "Streets", sub: "MapLibre demo vector" },
+    { value: "satellite", label: "Satellite", sub: "Esri World Imagery" },
+    { value: "cartographic", label: "Dark", sub: "CARTO dark raster" },
+  ];
 
   const inviteUrl = useMemo(() => {
     if (typeof window === "undefined") return "";
@@ -490,16 +501,45 @@ function RoomPage() {
           >
             <QrIcon className="h-4 w-4" />
           </Button>
-          <Button
-            variant="ghost"
-            className="h-8 gap-1 px-2 text-[10px] font-mono font-bold tracking-wider"
-            onClick={cycleBasemap}
-            aria-label="Switch basemap"
-            title="Switch basemap"
-          >
-            <Layers3 className="h-3.5 w-3.5" />
-            {basemapLabel}
-          </Button>
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button
+                variant="ghost"
+                className="h-8 gap-1 px-2 text-[10px] font-mono font-bold tracking-wider"
+                aria-label="Switch basemap"
+                title="Switch basemap"
+              >
+                <Layers3 className="h-3.5 w-3.5" />
+                {basemapLabel}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-56 p-1">
+              <div className="px-2 py-1.5 text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+                Basemap
+              </div>
+              {BASEMAP_OPTIONS.map((opt) => {
+                const active = basemap === opt.value;
+                return (
+                  <button
+                    key={opt.value}
+                    onClick={() => setBasemap(opt.value)}
+                    className={`flex w-full items-start gap-2 rounded-md px-2 py-2 text-left transition-colors ${
+                      active ? "bg-primary/15 text-primary" : "hover:bg-secondary"
+                    }`}
+                  >
+                    <Layers3 className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span className="flex-1">
+                      <span className="block text-sm font-semibold">{opt.label}</span>
+                      <span className="block text-[10px] text-muted-foreground">{opt.sub}</span>
+                    </span>
+                    {active && (
+                      <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-primary" />
+                    )}
+                  </button>
+                );
+              })}
+            </PopoverContent>
+          </Popover>
           <Sheet>
             <SheetTrigger asChild>
               <Button size="icon" variant="ghost" className="h-8 w-8" aria-label="Roster">
