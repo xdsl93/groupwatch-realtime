@@ -8,10 +8,16 @@ function roomPeerId(code: string, suffix: string) {
   return `tactrack-${code.toLowerCase()}-${suffix}`;
 }
 
-function randomSuffix() {
-  const a = new Uint8Array(6);
-  crypto.getRandomValues(a);
-  return Array.from(a, (b) => b.toString(36).padStart(2, "0")).join("").slice(0, 10);
+// Deterministic, stable suffix derived from identity.id so the same device
+// reuses the same peer-id across reconnects to a room. This lets previously
+// connected peers re-dial us by the id they already learned.
+async function deterministicSuffix(identityId: string, roomCode: string) {
+  const data = new TextEncoder().encode(`${roomCode.toLowerCase()}:${identityId}`);
+  const buf = await crypto.subtle.digest("SHA-256", data);
+  const bytes = new Uint8Array(buf);
+  let s = "";
+  for (let i = 0; i < 8; i++) s += bytes[i].toString(36);
+  return s.replace(/[^a-z0-9]/g, "").slice(0, 12) || "peer";
 }
 
 export type MeshHandlers = {
@@ -28,7 +34,7 @@ export class Mesh {
   private conns = new Map<string, DataConnection>();
   private knownPeerIds = new Set<string>();
   private pendingConnectIds = new Set<string>();
-  private suffix = randomSuffix();
+  private suffix = "";
   private destroyed = false;
   private opened = false;
 
@@ -41,6 +47,7 @@ export class Mesh {
 
   async start() {
     this.key = await importKey(this.keyB64);
+    this.suffix = await deterministicSuffix(this.identity.id, this.roomCode);
     const selfId = roomPeerId(this.roomCode, this.suffix);
     this.peer = new Peer(selfId, {
       debug: 1,
