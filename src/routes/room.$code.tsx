@@ -354,7 +354,7 @@ function RoomPage() {
   const markerArr = useMemo(() => Array.from(markers.values()), [markers]);
   const connectedCount = peerArr.filter((p) => p.connected).length;
   const mapIdentity: Identity = identity ?? { id: "local", callsign: "YOU", color: PALETTE[0] };
-  const basemapLabel = basemap === "streets" ? "STR" : basemap === "satellite" ? "SAT" : "CAR";
+  const basemapLabel = basemap === "streets" ? "OSM" : basemap === "satellite" ? "SAT" : "TOPO";
 
   // Tick to refresh "last seen" labels
   const [, setTick] = useState(0);
@@ -441,9 +441,9 @@ function RoomPage() {
   }
 
   const BASEMAP_OPTIONS: { value: BasemapMode; label: string; sub: string }[] = [
-    { value: "streets", label: "Streets", sub: "MapLibre demo vector" },
+    { value: "streets", label: "Streets", sub: "OpenStreetMap" },
     { value: "satellite", label: "Satellite", sub: "Esri World Imagery" },
-    { value: "cartographic", label: "Dark", sub: "CARTO dark raster" },
+    { value: "topo", label: "Topographic", sub: "OpenTopoMap" },
   ];
 
   const inviteUrl = useMemo(() => {
